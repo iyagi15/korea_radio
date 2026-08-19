@@ -1288,6 +1288,24 @@ class KoreaRadioMediaPlayer(MediaPlayerEntity):
         self.async_write_ha_state()
         if self._manual_stop or not self._current_station:
             return
+
+        # 이 콜백은 성격이 다른 두 사건에 똑같이 불린다.
+        #   (1) 재생 중에 ffmpeg 이 죽음 — 스피커는 아직 playing 이다. 되살리는 게 맞다.
+        #   (2) 캐스트 세션이 끝나 스피커 쪽에서 HTTP 연결을 끊음 — 스피커는 이미 off/paused 다.
+        #       사용자가 스피커를 껐거나, 일시정지로 둔 채 캐스트 유휴 타임아웃이 지난 경우다.
+        #       여기서 되살리면 아무도 안 켠 라디오가 저절로 나온다.
+        # _manual_stop 은 라디오 엔티티에 media_stop/turn_off 를 했을 때만 서기 때문에
+        # (2) 를 걸러내지 못한다. 그래서 끊긴 그 순간의 대상 스피커 상태로 구분한다.
+        # 아래 _wait_and_resume_after_interrupts 가 "대상이 playing 이 아니게 될 때까지
+        # 기다렸다가" 재개하는 구조인 것도 애초에 (1) 을 전제로 한 것이다.
+        target_state = self.hass.states.get(self._target_entity)
+        if target_state is None or target_state.state not in (STATE_PLAYING, "buffering"):
+            _LOGGER.debug(
+                "Stream stopped while target was %s - not resuming",
+                target_state.state if target_state else "unknown",
+            )
+            return
+
         self._resume_pending = True
         self._last_interrupt_ts = time.monotonic()
         if self._resume_task is None or self._resume_task.done():
